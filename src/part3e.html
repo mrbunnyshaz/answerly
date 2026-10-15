@@ -1,0 +1,84 @@
+<script>
+(function () {
+  'use strict';
+  var A = window.__A, $ = A.$, el = A.el;
+
+  function table(heads, rows) {
+    var wrap = el('div', 'tblwrap'), t = el('table', 'tbl'), thead = el('thead'), tr = el('tr');
+    heads.forEach(function (h) { tr.appendChild(el('th', null, h)); });
+    thead.appendChild(tr); t.appendChild(thead);
+    var tb = el('tbody');
+    rows.forEach(function (r) { var x = el('tr'); r.forEach(function (c) { x.appendChild(el('td', null, c)); }); tb.appendChild(x); });
+    t.appendChild(tb); wrap.appendChild(t); return wrap;
+  }
+  function card(eyebrow, title, intro) {
+    var c = el('section', 'card'), d = el('div');
+    if (eyebrow) d.appendChild(el('p', 'eyebrow', eyebrow));
+    d.appendChild(el('h2', null, title)); c.appendChild(d);
+    if (intro) c.appendChild(el('p', 'muted', intro));
+    return c;
+  }
+  function chips(list, cls) {
+    var w = el('div', 'chips');
+    list.forEach(function (x) { w.appendChild(el('span', 'chip ' + cls, x)); });
+    return w;
+  }
+
+  function build() {
+    var box = $('view-safety');
+    if (box.childElementCount) return;
+
+    var c1 = card('Built into Answerly', 'How Answerly keeps you safe',
+      'Students are often under 18, so every step that moves data needs a person to say yes first. Here is what leaves your device, who can see what, and what is not built yet.');
+    box.appendChild(c1);
+
+    var c2 = card(null, 'What leaves your device');
+    c2.appendChild(table(['When you press', 'What is sent', 'Where it goes', 'Your approval'], [
+      ['Show me the answer', 'The photo you chose, sent twice: a full solve and a blind check. Photo details are stripped.', 'Claude, on your own account. Answerly does not keep the photo.', 'Consent boxes, then your button press'],
+      ['I don\'t get this step', 'The question text and the working lines.', 'Claude, on your own account', 'Your button press'],
+      ['Send to my teacher', 'Text only: the question, what you wrote, Answerly\'s answer, the second solve and why it was flagged.', 'The shared database. You and your teacher can read it.', 'An approval screen showing exactly the text'],
+      ['Copy answer sheet', 'Text only.', 'Your clipboard', 'An approval screen showing exactly the text']
+    ]));
+    box.appendChild(c2);
+
+    var c3 = card(null, 'Who can see what');
+    c3.appendChild(table(['Role', 'Can do', 'Cannot do'], [
+      ['Student (Contributor access)', 'Check papers. Read and send their own reviews.', 'Read anyone else\'s reviews.'],
+      ['Teacher (Editor access)', 'Read the reviews students send. Approve, correct or send back, with a note.', 'See photos. They are never stored.'],
+      ['Owner', 'Everything a teacher can. Chooses who is a teacher or a student from the share menu.', 'Read a student\'s private device log.']
+    ]));
+    c3.appendChild(el('p', 'muted', 'Roles follow the share settings of this page. Anyone given Editor access acts as a teacher.'));
+    box.appendChild(c3);
+
+    var c4 = card(null, 'Checks that run');
+    c4.appendChild(el('p', 'eyebrow', 'Built now'));
+    c4.appendChild(chips(['Consent before any upload', 'Photo never stored', 'Two separate solves, compared', 'Approval before copy and send', 'Teacher decision on flagged answers', 'Hash-chained audit log', 'Decision trail on every review'], 'built'));
+    c4.appendChild(el('p', 'eyebrow', 'Planned'));
+    c4.appendChild(chips(['Guardian accounts for under-18s', 'Wellbeing signals sent to a trained person', 'School-level separation and UAE data residency', 'Server-side append-only audit log', 'Teacher-set hint-only mode', 'Arabic interface'], 'planned'));
+    box.appendChild(c4);
+
+    var c5 = card(null, 'Know the limits');
+    c5.appendChild(el('p', null, 'The audit log lives in this browser, so a student can clear it. The verify button shows if a line was changed, but it cannot show a log that was wiped. Roles come from share settings, not a school directory. Answerly can still be wrong, which is why every answer shows whether two separate solves agree, and anything doubtful is marked for a teacher.'));
+    box.appendChild(c5);
+
+    var c6 = card('For the demo', 'Show it in five steps');
+    var ol = el('ol', 'demo');
+    ['Open the Audit log tab and press "Withdraw consent and clear log" to show the consent screen again.',
+     'Upload a marked paper and watch the two solves run, then reveal the working one step at a time and press "I don\'t get this step".',
+     'Press the button below to show a caught error, where the second solve disagrees with the first.',
+     'Press "Send to my teacher" on it and read the approval screen. Then open the Teacher queue and approve, correct or send it back.',
+     'Open My reviews to see the decision, then the Audit log and press "Verify the log".'
+    ].forEach(function (t) { ol.appendChild(el('li', null, t)); });
+    c6.appendChild(ol);
+    var row = el('div', 'actions');
+    row.appendChild(A.btn('Show a caught error', function () {
+      A.renderResult(A.EXAMPLE_FLAG, true, 'Demo: the first solve forgot the ½, and the independent second solve caught it. You can send this to the teacher queue.');
+      A.showView('check');
+      $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, true));
+    c6.appendChild(row);
+    box.appendChild(c6);
+  }
+  A.onOpen(build);
+})();
+</script>

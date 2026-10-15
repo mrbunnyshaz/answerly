@@ -1,0 +1,145 @@
+<script>
+(function () {
+  'use strict';
+  var CONSENT_V = '2026-10-v1';
+  var $ = function (id) { return document.getElementById(id); };
+  var store = {
+    get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+    del: function (k) { try { localStorage.removeItem(k); } catch (e) {} }
+  };
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  window.__A = { $: $, el: el, store: store, CONSENT_V: CONSENT_V };
+
+  /* ---------- Audit log: append-only, each line holds the hash of the line before ---------- */
+  var logOn = false, entries = [], queue = Promise.resolve();
+  function loadLog() {
+    try { entries = JSON.parse(store.get('answerly.log') || '[]'); } catch (e) { entries = []; }
+    if (!Array.isArray(entries)) entries = [];
+  }
+  async function sha(s) {
+    try {
+      var b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+      return Array.from(new Uint8Array(b)).map(function (x) { return x.toString(16).padStart(2, '0'); }).join('');
+    } catch (e) {
+      var h = 5381;
+      for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+      return 'f' + (h >>> 0).toString(16).padStart(8, '0');
+    }
+  }
+  function payload(e) { return JSON.stringify([e.t, e.actor, e.action, e.detail, e.purpose, e.consent, e.model, e.outcome, e.prev]); }
+  function audit(actor, action, detail, purpose, model, outcome) {
+    queue = queue.then(async function () {
+      var prev = entries.length ? entries[entries.length - 1].hash : 'genesis';
+      var e = { t: new Date().toISOString(), actor: actor, action: action, detail: detail, purpose: purpose,
+                consent: CONSENT_V, model: model || '-', outcome: outcome || 'ok', prev: prev };
+      e.hash = await sha(payload(e));
+      entries.push(e);
+      if (logOn) store.set('answerly.log', JSON.stringify(entries));
+      renderLog();
+    });
+    return queue;
+  }
+  window.__A.audit = audit;
+
+  function renderLog() {
+    var box = $('log');
+    box.textContent = '';
+    if (!entries.length) {
+      box.appendChild(el('p', 'muted', 'Nothing logged yet. Actions appear here as you use Answerly.'));
+      return;
+    }
+    entries.slice().reverse().forEach(function (e) {
+      var row = el('div', 'entry');
+      row.appendChild(el('div', 't', e.t.replace('T', ' ').slice(0, 19) + ' UTC'));
+      var main = el('div');
+      main.appendChild(el('strong', null, e.action.replace(/_/g, ' ')));
+      main.appendChild(el('span', 'muted', ' by ' + e.actor + '. ' + e.detail));
+      row.appendChild(main);
+      row.appendChild(el('span', 'out ' + e.outcome, e.outcome));
+      row.appendChild(el('div', 'meta', 'purpose: ' + e.purpose + '  |  consent ' + e.consent + '  |  model: ' + e.model + '  |  hash ' + e.hash.slice(0, 10) + ' after ' + e.prev.slice(0, 10)));
+      box.appendChild(row);
+    });
+  }
+
+  $('verify').onclick = async function () {
+    var out = $('verify-out');
+    await queue;
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var expectPrev = i === 0 ? e.prev : entries[i - 1].hash;
+      var okHash = (await sha(payload(e))) === e.hash;
+      if (e.prev !== expectPrev || !okHash) {
+        out.textContent = 'Line ' + (i + 1) + ' does not match its fingerprint. The log was changed after it was written.';
+        return;
+      }
+    }
+    out.textContent = entries.length ? 'The log is intact. All ' + entries.length + ' lines match their fingerprints.' : 'Nothing to verify yet.';
+  };
+
+  /* ---------- Consent gate ---------- */
+  var needs = Array.prototype.slice.call(document.querySelectorAll('.need'));
+  function syncConsent() { $('consent-go').disabled = !needs.every(function (n) { return n.checked; }); }
+  needs.forEach(function (n) { n.addEventListener('change', syncConsent); });
+
+  var openHooks = [], resetHooks = [], A = window.__A;
+  A.opened = false;
+  A.onOpen = function (fn) { if (A.opened) fn(); else openHooks.push(fn); };
+  A.onReset = function (fn) { resetHooks.push(fn); };
+  function openApp() {
+    $('consent').hidden = true;
+    $('app').hidden = false;
+    $('tabs').hidden = false;
+    renderLog();
+    A.opened = true;
+    var hs = openHooks; openHooks = [];
+    hs.forEach(function (fn) { try { fn(); } catch (e) { console.error(e); } });
+  }
+
+  $('consent-go').onclick = function () {
+    logOn = $('c-log').checked;
+    store.set('answerly.consent', CONSENT_V);
+    store.set('answerly.logon', logOn ? '1' : '0');
+    if (logOn) loadLog(); else entries = [];
+    audit('student', 'consent_given', 'Three required boxes ticked. Saved log: ' + (logOn ? 'on' : 'off') + '.', 'Access to Answerly');
+    openApp();
+  };
+
+  $('withdraw').onclick = function () {
+    store.del('answerly.consent'); store.del('answerly.logon'); store.del('answerly.log');
+    entries = []; logOn = false;
+    needs.concat([$('c-log')]).forEach(function (n) { n.checked = false; });
+    syncConsent();
+    $('verify-out').textContent = '';
+    A.opened = false;
+    resetHooks.forEach(function (fn) { try { fn(); } catch (e) { console.error(e); } });
+    $('app').hidden = true; $('tabs').hidden = true; $('consent').hidden = false;
+    showView('check');
+  };
+
+  /* ---------- Tabs ---------- */
+  function showView(v) {
+    ['check', 'reviews', 'queue', 'safety', 'log'].forEach(function (name) {
+      $('view-' + name).hidden = name !== v;
+      $('tab-' + name).setAttribute('aria-selected', name === v ? 'true' : 'false');
+    });
+    if (v === 'log') renderLog();
+  }
+  A.showView = showView;
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (b) {
+    b.onclick = function () { showView(b.getAttribute('data-view')); };
+  });
+
+  /* ---------- Start: skip the gate only if this viewer already agreed to this version ---------- */
+  if (store.get('answerly.consent') === CONSENT_V) {
+    logOn = store.get('answerly.logon') === '1';
+    if (logOn) loadLog();
+    openApp();
+  }
+})();
+</script>

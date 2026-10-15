@@ -1,0 +1,137 @@
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span>Answer<b>ly</b></span> <small>See the answer. See the working. See what went wrong.</small></div>
+    <div class="tabs" id="tabs" role="tablist" hidden>
+      <button class="tab" role="tab" id="tab-check" aria-selected="true" data-view="check">Check a paper</button>
+      <button class="tab" role="tab" id="tab-reviews" aria-selected="false" data-view="reviews">My reviews</button>
+      <button class="tab" role="tab" id="tab-queue" aria-selected="false" data-view="queue" hidden>Teacher queue</button>
+      <button class="tab" role="tab" id="tab-safety" aria-selected="false" data-view="safety">Safety</button>
+      <button class="tab" role="tab" id="tab-log" aria-selected="false" data-view="log">Audit log</button>
+    </div>
+  </header>
+
+  <!-- Consent gate: nothing can be uploaded until this is accepted -->
+  <section class="card consent" id="consent">
+    <div>
+      <p class="eyebrow">Before you start</p>
+      <h2>Your paper, your choice</h2>
+    </div>
+    <p class="muted">Answerly sends the photo you pick to Claude so it can read the questions and write out the working. Answerly does not keep your photo. Tick each box to continue.</p>
+    <ul>
+      <li><label class="check"><input type="checkbox" class="need" id="c-age"><span>I am 18 or older, or a parent or guardian has agreed that I can use Answerly.</span></label></li>
+      <li><label class="check"><input type="checkbox" class="need" id="c-send"><span>I understand the photo I choose is sent to Claude to be read, and only when I press the button.</span></label></li>
+      <li><label class="check"><input type="checkbox" class="need" id="c-ai"><span>I understand the answers are written by AI. They are not the official mark scheme, so I will check them with my teacher.</span></label></li>
+      <li><label class="check"><input type="checkbox" id="c-log"><span>Optional: keep my audit log on this device between visits. Without this, the log lasts only until I close the page. The log never contains my paper.</span></label></li>
+    </ul>
+    <div class="row">
+      <button class="btn primary" id="consent-go" disabled>Agree and continue</button>
+      <span class="note" id="consent-note">Consent version 2026-10-v1. You can withdraw any time from the Audit log tab.</span>
+    </div>
+  </section>
+
+  <main id="app" hidden>
+    <!-- Check a paper -->
+    <div id="view-check" class="wrap" style="gap:18px">
+      <section class="card">
+        <div>
+          <p class="eyebrow">Step 1</p>
+          <h2>Photograph a question you want to understand</h2>
+        </div>
+        <div class="row">
+          <label class="f grow" for="board">Curriculum
+            <select id="board">
+              <option value="British (GCSE / A-Level), method marks M1 and accuracy marks A1">British (GCSE / A-Level)</option>
+              <option value="IB (Diploma or MYP), M/A/R marks and command terms">IB</option>
+              <option value="Indian (CBSE / ICSE / State), step-wise marking where each formula, substitution and unit earns marks">Indian (CBSE / ICSE)</option>
+              <option value="American (AP / SAT / state exams), rubric-based partial credit">American (AP / SAT)</option>
+              <option value="Not sure, use clear step-by-step marking">Not sure</option>
+            </select>
+          </label>
+          <label class="f grow" for="subject">Subject (optional)
+            <input type="text" id="subject" placeholder="e.g. Maths, Physics" maxlength="60" autocomplete="off">
+          </label>
+        </div>
+        <label class="drop" id="drop" for="file">
+          <input type="file" id="file" accept="image/*" hidden>
+          <div id="drop-empty">
+            <strong>Tap to choose a photo, or drop it here</strong>
+            <p class="muted" style="font-size:.85rem">One or two questions per photo gives the best result.</p>
+          </div>
+          <img id="preview" alt="Preview of the chosen paper" hidden>
+        </label>
+        <p class="note"><span aria-hidden="true">&#9888;</span><span>Cover or crop your name, candidate number and school before you take the photo. Answerly does not need them.</span></p>
+        <div class="row">
+          <button class="btn primary" id="go" disabled>Show me the answer</button>
+          <button class="btn" id="clear" hidden>Choose a different photo</button>
+        </div>
+      </section>
+
+      <div id="status" hidden></div>
+      <div id="results" class="wrap" style="gap:18px"></div>
+    </div>
+
+    <!-- My reviews (student) -->
+    <div id="view-reviews" class="wrap" style="gap:18px" hidden>
+      <section class="card">
+        <div>
+          <p class="eyebrow">Sent to your teacher</p>
+          <h2>My reviews</h2>
+        </div>
+        <p class="muted">When Answerly is unsure, or you want a second opinion, you can send a question to your teacher. Only the text you approve is sent, never your photo. Only you and your teacher can see it.</p>
+        <p class="note" id="reviews-note" role="status"></p>
+      </section>
+      <div id="reviews-list" class="wrap" style="gap:14px"></div>
+    </div>
+
+    <!-- Teacher queue (only shown to editors) -->
+    <div id="view-queue" class="wrap" style="gap:18px" hidden>
+      <section class="card">
+        <div>
+          <p class="eyebrow">For teachers</p>
+          <h2>Teacher queue</h2>
+        </div>
+        <p class="muted">Reviews students chose to send appear here live. Nothing a student sees as "checked" until you approve, correct or reject it. Your decision is logged on the review.</p>
+        <p class="note" id="queue-note" role="status"></p>
+      </section>
+      <div id="queue-list" class="wrap" style="gap:14px"></div>
+    </div>
+
+    <!-- Safety -->
+    <div id="view-safety" class="wrap" style="gap:18px" hidden></div>
+
+    <!-- Audit log -->
+    <div id="view-log" class="wrap" style="gap:18px" hidden>
+      <section class="card">
+        <div>
+          <p class="eyebrow">Your record</p>
+          <h2>Audit log</h2>
+        </div>
+        <p class="muted">Every action is listed with who did it, why, the consent version and the outcome. Each line carries a fingerprint of the line before it, so a changed or removed line shows up when you verify. Paper content is never written here.</p>
+        <div class="actions">
+          <button class="btn" id="verify">Verify the log</button>
+          <button class="btn danger" id="withdraw">Withdraw consent and clear log</button>
+        </div>
+        <p class="note" id="verify-out" role="status"></p>
+      </section>
+      <div class="log" id="log"></div>
+    </div>
+  </main>
+
+  <p class="foot">AI-generated study help. Not an official mark scheme. Check with your teacher.</p>
+</div>
+
+<!-- Approval gate: a person approves before anything leaves the page -->
+<div class="scrim" id="gate" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+    <div>
+      <p class="eyebrow">Needs your approval</p>
+      <h3 id="gate-title">Copy this answer sheet?</h3>
+    </div>
+    <p class="muted" id="gate-why">This is exactly what will happen. Nothing happens until you approve.</p>
+    <pre id="gate-body"></pre>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn" id="gate-no">Cancel</button>
+      <button class="btn primary" id="gate-yes">Approve and copy</button>
+    </div>
+  </div>
+</div>

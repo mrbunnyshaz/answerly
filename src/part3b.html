@@ -1,0 +1,305 @@
+<script>
+(function () {
+  'use strict';
+  var A = window.__A, $ = A.$, el = A.el, audit = A.audit;
+
+  var sampleP = null;
+  A.getSample = function () {
+    if (!sampleP) sampleP = (async function () {
+      if (!window.claude || !window.claude.use) return null;
+      try { return await window.claude.use('sample'); } catch (e) { return null; }
+    })();
+    return sampleP;
+  };
+  function btn(label, fn, primary) {
+    var b = el('button', 'btn' + (primary ? ' primary' : ''), label);
+    b.type = 'button'; b.onclick = fn; return b;
+  }
+  A.btn = btn;
+
+  /* ---------- Examples (clearly labelled on screen) ---------- */
+  var EXAMPLE = { questions: [{
+    number: '3', question: 'Solve 3x + 7 = 2x − 5.\nHence find the value of 4x + 1.',
+    marks_available: 4, marks_awarded: 2, command_word: 'Solve',
+    student_answer: 'x = 12, so 4x + 1 = 49',
+    what_went_wrong: {
+      cause: 'careless_error', first_wrong_step: '3x − 2x = −5 − 7 became x = 12',
+      explanation: 'Your method is right: you collected the x terms on one side and the numbers on the other. The slip is in −5 − 7. Both numbers are negative, so the total is −12, not +12. That wrong value then carried into the second part, which is why you still earned the method mark there.',
+      fix: 'After every move across the equals sign, say the sign out loud. Then put your x back into the original equation and check both sides match.'
+    },
+    model_answer: { steps: [
+      { working: '3x − 2x = −5 − 7', mark: 'M1', why: 'Collect the x terms on one side and the numbers on the other.' },
+      { working: 'x = −12', mark: 'A1', why: '−5 − 7 = −12. Two negatives add to a bigger negative.' },
+      { working: '4(−12) + 1', mark: 'M1', why: 'Substitute the value of x into the expression.' },
+      { working: '= −48 + 1 = −47', mark: 'A1', why: 'Multiply first, then add 1.' }
+    ], final_answer: 'x = −12 and 4x + 1 = −47' },
+    other_methods: [{
+      name: 'Balance both sides', when_to_use: 'Good if you like to see each operation written down and keep the same thing happening to both sides.',
+      steps: [
+        { working: '3x + 7 = 2x − 5\nSubtract 2x from both sides:\nx + 7 = −5', mark: 'M1', why: 'Do the same to both sides so the equation stays balanced.' },
+        { working: 'Subtract 7 from both sides:\nx = −12', mark: 'A1', why: '−5 − 7 = −12.' },
+        { working: '4x + 1 = 4 × (−12) + 1 = −47', mark: 'M1 A1', why: 'Substitute, multiply, then add.' }
+      ], final_answer: 'x = −12 and 4x + 1 = −47'
+    }],
+    check: { status: 'agreed', other_final: 'x = −12 and 4x + 1 = −47', other_steps: [] },
+    confidence: 'high', review_note: null
+  }], paper_notes: null };
+
+  var EXAMPLE_FLAG = { questions: [{
+    number: '5(b)', question: 'A car accelerates uniformly from rest at 2.5 m/s² for 8.0 s.\nCalculate the distance it travels in this time.',
+    marks_available: 3, marks_awarded: null, command_word: 'Calculate',
+    student_answer: 's = 80 m',
+    what_went_wrong: { cause: 'none', first_wrong_step: '', explanation: '', fix: '' },
+    model_answer: { steps: [
+      { working: 's = ut + at²', mark: 'M1', why: 'Choose an equation of motion with u, a and t.' },
+      { working: 's = 0 + 2.5 × 8²', mark: 'M1', why: 'Substitute u = 0, a = 2.5, t = 8.' },
+      { working: 's = 160 m', mark: 'A1', why: 'Evaluate.' }
+    ], final_answer: '160 m' },
+    other_methods: [],
+    check: { status: 'disagreed', other_final: '80 m', other_steps: ['s = ut + ½at²', 's = 0 + ½ × 2.5 × 64', 's = 80 m'] },
+    confidence: 'low',
+    review_note: 'Demo of a caught error: the first solve left out the ½ in the equation of motion, and the independent solve did not.'
+  }], paper_notes: null };
+  A.EXAMPLE_FLAG = EXAMPLE_FLAG;
+
+  var CAUSE = {
+    concept_gap: ['Concept gap', ''], careless_error: ['Careless error', ''], time_pressure: ['Time pressure', ''],
+    misread_question: ['Misread the question', ''], none: ['No marks lost', 'ok'], unclear: ['Cannot tell', 'unk']
+  };
+
+  /* ---------- Flags: why a question needs a person to look ---------- */
+  function flagsOf(q) {
+    var f = [], c = String(q.confidence || 'medium').toLowerCase();
+    var st = (q.check || {}).status || 'unchecked';
+    if (c !== 'high') f.push('Answerly confidence is ' + c);
+    if (st === 'disagreed') f.push('Two independent solves disagree');
+    if (st === 'unchecked') f.push('No second independent solve');
+    if (q.review_note) f.push(String(q.review_note));
+    return f;
+  }
+  A.flagsOf = flagsOf;
+
+  /* ---------- Explain one step ---------- */
+  async function explainStep(q, mi, m, n, s, ex, eb) {
+    if (!ex.hidden) { ex.hidden = true; eb.textContent = 'I don\'t get this step'; return; }
+    ex.hidden = false; eb.textContent = 'Hide explanation';
+    if (s._exp) { ex.textContent = s._exp; return; }
+    var sample = await A.getSample();
+    if (!sample) { ex.textContent = 'Asking questions is not available in this view.'; return; }
+    ex.textContent = 'Thinking...';
+    var lines = m.steps.map(function (t, i) { return (i + 1) + '. ' + t.working + '   [' + (t.why || '') + ']'; }).join('\n');
+    var prompt = 'A student is stuck on one step of a worked exam solution. In at most 70 words, explain step ' + (n + 1)
+      + ' in plain words: what is being done, the rule behind it, and one thing students often get wrong here. Plain text and Unicode maths only, no LaTeX, no headings.\n\nQuestion:\n'
+      + q.question + '\n\nWorking:\n' + lines + '\n\nThe step they do not understand: ' + (n + 1);
+    try {
+      var r = await sample(prompt, { modelTier: 'quick' });
+      s._exp = r.text.trim(); ex.textContent = s._exp;
+      await audit('student', 'step_explained', 'Question ' + (q.number || '?') + ', method ' + (mi + 1) + ', step ' + (n + 1) + '. Text only.', 'Explain one step', 'Claude, quick tier', 'ok');
+    } catch (e) {
+      ex.textContent = 'Could not get an explanation right now. Press the button again in a minute.';
+    }
+  }
+
+  /* ---------- Answer panel: hint-first, one step at a time ---------- */
+  function stepsGrid(q, mi, m) {
+    var box = el('div', 'stepbox'), g = el('div', 'steps');
+    ['Working', 'Mark', 'Why this step'].forEach(function (h) { g.appendChild(el('div', 'h', h)); });
+    m.steps.slice(0, m.shown).forEach(function (s, n) {
+      g.appendChild(el('div', 'w', String(s.working || '')));
+      var mk = el('div', 'm'); if (s.mark) mk.appendChild(el('span', 'mk', String(s.mark))); g.appendChild(mk);
+      var y = el('div', 'y'); y.appendChild(el('div', null, String(s.why || '')));
+      var eb = el('button', 'linkbtn', 'I don\'t get this step'); eb.type = 'button'; y.appendChild(eb);
+      g.appendChild(y);
+      var ex = el('div', 'exp'); ex.hidden = true; g.appendChild(ex);
+      eb.onclick = function () { explainStep(q, mi, m, n, s, ex, eb); };
+    });
+    box.appendChild(g);
+    return box;
+  }
+
+  function methodsOf(q, revealAll) {
+    var list = [{ name: '', when_to_use: '', steps: (q.model_answer || {}).steps || [], final_answer: (q.model_answer || {}).final_answer }]
+      .concat((q.other_methods || []).map(function (m) { return { name: m.name, when_to_use: m.when_to_use, steps: m.steps || [], final_answer: m.final_answer }; }));
+    list.forEach(function (m) { m.shown = revealAll ? m.steps.length : 0; });
+    return list;
+  }
+
+  function buildAnswer(q, revealAll) {
+    var methods = methodsOf(q, revealAll), cur = 0, many = methods.length > 1;
+    var wrap = el('div', 'sec'), panel = el('div', 'sec'), btns = [];
+    wrap.appendChild(el('p', 'eyebrow', many ? 'The answer, ' + methods.length + ' ways' : 'The answer, step by step'));
+    if (many) {
+      var tabs = el('div', 'mtabs'); tabs.setAttribute('role', 'tablist');
+      methods.forEach(function (m, i) {
+        var b = el('button', 'mtab', i === 0 ? 'Method 1' : 'Method ' + (i + 1) + (m.name ? ': ' + m.name : ''));
+        b.type = 'button'; b.setAttribute('role', 'tab'); b.onclick = function () { cur = i; draw(); };
+        btns.push(b); tabs.appendChild(b);
+      });
+      wrap.appendChild(tabs);
+    }
+    function draw() {
+      btns.forEach(function (b, j) { b.setAttribute('aria-selected', j === cur ? 'true' : 'false'); });
+      panel.textContent = '';
+      var m = methods[cur];
+      if (m.when_to_use) panel.appendChild(el('p', 'muted', m.when_to_use));
+      if (m.shown === 0) {
+        var r = el('div', 'reveal');
+        r.appendChild(el('p', null, 'Try the question yourself first. When you are ready, reveal the working one step at a time.'));
+        var row = el('div', 'actions');
+        row.appendChild(btn('Show step 1', function () { m.shown = 1; draw(); }, true));
+        row.appendChild(btn('Show all steps', function () { m.shown = m.steps.length; draw(); }));
+        r.appendChild(row); panel.appendChild(r); return;
+      }
+      panel.appendChild(stepsGrid(q, cur, m));
+      if (m.shown < m.steps.length) {
+        var row2 = el('div', 'actions');
+        row2.appendChild(btn('Show next step (' + (m.shown + 1) + ' of ' + m.steps.length + ')', function () { m.shown++; draw(); }, true));
+        row2.appendChild(btn('Show all', function () { m.shown = m.steps.length; draw(); }));
+        panel.appendChild(row2); return;
+      }
+      if (m.final_answer) {
+        var f = el('div', 'final'); f.appendChild(el('span', null, 'Final answer'));
+        f.appendChild(el('span', 'mono', String(m.final_answer))); panel.appendChild(f);
+      }
+      var ck = q.check || {};
+      if (ck.status === 'disagreed') {
+        var cmp = el('div', 'cmp');
+        var a = el('div'); a.appendChild(el('span', 'eyebrow', 'First solve')); a.appendChild(el('span', 'mono', String((q.model_answer || {}).final_answer || ''))); cmp.appendChild(a);
+        var b2 = el('div'); b2.appendChild(el('span', 'eyebrow', 'Independent second solve')); b2.appendChild(el('span', 'mono', String(ck.other_final || '')));
+        (ck.other_steps || []).forEach(function (t) { b2.appendChild(el('span', 'mono muted', String(t))); });
+        cmp.appendChild(b2); panel.appendChild(cmp);
+      }
+    }
+    draw();
+    wrap.appendChild(panel);
+    return wrap;
+  }
+
+  /* ---------- Plain-text answer sheet (what Copy exports) ---------- */
+  function sheetText(q) {
+    var out = ['Question ' + (q.number || '') + (q.marks_available ? ' (' + q.marks_available + ' marks)' : ''), q.question || '', ''];
+    var w = q.what_went_wrong || {}, ck = q.check || {};
+    if (q.student_answer) out.push('What I wrote: ' + q.student_answer);
+    if (ck.status !== 'disagreed') {
+      if (w.first_wrong_step) out.push('Where it went wrong: ' + w.first_wrong_step);
+      if (w.explanation) out.push(w.explanation);
+      if (w.fix) out.push('Next time: ' + w.fix);
+    }
+    out.push('');
+    methodsOf(q, true).forEach(function (m, i) {
+      out.push((i === 0 ? 'Model answer' : 'Other method: ' + (m.name || i)) + ':');
+      m.steps.forEach(function (s, n) { out.push((n + 1) + '. ' + s.working + '   [' + (s.mark || '-') + ']  ' + (s.why || '')); });
+      if (m.final_answer) out.push('Final answer: ' + m.final_answer);
+      out.push('');
+    });
+    if (ck.status === 'disagreed') out.push('WARNING: the independent second solve gave: ' + (ck.other_final || '') + '. Not confirmed.', '');
+    out.push('AI-generated study help. Not an official mark scheme. Check with your teacher.');
+    return out.join('\n');
+  }
+  A.sheetText = sheetText;
+
+  /* ---------- Question card ---------- */
+  function questionCard(q, isExample) {
+    var card = el('article', 'card');
+    var head = el('div', 'q-head'), left = el('div', 'row'), right = el('div', 'row');
+    left.appendChild(el('span', 'q-num', 'Q ' + (q.number || '?')));
+    if (q.command_word) left.appendChild(el('span', 'pill', String(q.command_word)));
+    if (q.marks_available != null) {
+      right.appendChild(el('span', 'score', q.marks_awarded != null ? q.marks_awarded + ' / ' + q.marks_available + ' marks' : q.marks_available + ' marks available'));
+    }
+    head.appendChild(left); head.appendChild(right); card.appendChild(head);
+    card.appendChild(el('p', 'qtext', String(q.question || '')));
+
+    var st = (q.check || {}).status || 'unchecked';
+    if (st === 'agreed') card.appendChild(el('p', 'banner good', 'Two independent solves agree on the final answer.'));
+    else if (st === 'disagreed') card.appendChild(el('p', 'banner bad', 'Answerly solved this twice, separately, and the answers differ. It is not sure which is right. Do not rely on either until your teacher confirms. Use "Send to my teacher" below.'));
+    else card.appendChild(el('p', 'banner warn', 'The second independent solve was not available, so this answer has not been double-checked.'));
+
+    var w = q.what_went_wrong || {}, cause = CAUSE[w.cause] || CAUSE.unclear;
+    var hasStudent = q.student_answer && String(q.student_answer).trim();
+    var sec = el('div', 'sec');
+    sec.appendChild(el('p', 'eyebrow', 'What went wrong'));
+    if (st === 'disagreed') {
+      sec.appendChild(el('p', 'muted', 'Answerly cannot judge your working yet, because its own two solves disagree. Your teacher can settle it.'));
+    } else if (w.cause === 'none') {
+      var ok = el('div', 'right'); ok.appendChild(el('p', null, w.explanation || 'Your answer matches the model answer. Nothing to fix.')); sec.appendChild(ok);
+    } else if (!hasStudent) {
+      sec.appendChild(el('p', 'muted', w.explanation || 'Your own working is not visible on this photo, so here is the full approach.'));
+    } else {
+      var wr = el('div', 'wrong');
+      wr.appendChild(el('span', 'cause ' + cause[1], cause[0]));
+      var yw = el('p'); yw.appendChild(el('strong', null, 'You wrote: ')); yw.appendChild(el('span', 'mono', String(q.student_answer))); wr.appendChild(yw);
+      if (w.first_wrong_step) { var fs = el('p'); fs.appendChild(el('strong', null, 'First wrong step: ')); fs.appendChild(el('span', 'mono', String(w.first_wrong_step))); wr.appendChild(fs); }
+      if (w.explanation) wr.appendChild(el('p', null, String(w.explanation)));
+      if (w.fix) { var fx = el('p'); fx.appendChild(el('strong', null, 'Next time: ')); fx.appendChild(document.createTextNode(String(w.fix))); wr.appendChild(fx); }
+      sec.appendChild(wr);
+    }
+    card.appendChild(sec);
+    card.appendChild(buildAnswer(q, isExample));
+
+    var flags = flagsOf(q), conf = String(q.confidence || 'medium').toLowerCase();
+    var meta = el('div', 'row');
+    meta.appendChild(el('span', 'badge ' + (conf === 'high' ? 'high' : conf), 'Confidence: ' + conf));
+    card.appendChild(meta);
+    if (flags.length) card.appendChild(el('p', 'review', 'Needs a teacher to look: ' + flags.join('. ') + '. Treat this as an approach guide until it is confirmed.'));
+
+    var act = el('div', 'actions');
+    var send = btn('Send to my teacher', function () { if (A.sendReview) A.sendReview(q, isExample, send); }, flags.length > 0);
+    act.appendChild(send);
+    var copy = btn('Copy answer sheet', async function () {
+      var okc = await A.openGate({ title: 'Copy this answer sheet?', why: 'This is exactly what will be copied to your clipboard. Nothing is copied until you approve.', body: sheetText(q), yes: 'Approve and copy', mode: 'copy' });
+      await audit('student', 'copy_answer_sheet', 'Question ' + (q.number || '?') + '. Text only, no photo.', 'Student export for own use', '-', okc ? 'approved' : 'declined');
+      if (okc) { copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = 'Copy answer sheet'; }, 2000); }
+    });
+    act.appendChild(copy);
+    card.appendChild(act);
+    return card;
+  }
+
+  function renderResult(data, isExample, labelText) {
+    var box = $('results');
+    box.textContent = '';
+    if (isExample) {
+      var b = el('div', 'row');
+      b.appendChild(el('span', 'pill ex', 'Example'));
+      b.appendChild(el('span', 'muted', labelText || 'This is a sample question showing what you will get back. Add your own photo above.'));
+      box.appendChild(b);
+    }
+    (data.questions || []).forEach(function (q) { box.appendChild(questionCard(q, isExample)); });
+    if (data.paper_notes) box.appendChild(el('p', 'review', String(data.paper_notes)));
+  }
+  A.renderResult = renderResult;
+
+  /* ---------- Approval gate ---------- */
+  var gateState = null;
+  A.openGate = function (o) {
+    return new Promise(function (resolve) {
+      $('gate-title').textContent = o.title;
+      $('gate-why').textContent = o.why;
+      $('gate-body').textContent = o.body;
+      $('gate-yes').textContent = o.yes || 'Approve';
+      $('gate').hidden = false;
+      gateState = { resolve: resolve, phase: 'ask', body: o.body, mode: o.mode || 'confirm' };
+      $('gate-yes').focus();
+    });
+  };
+  function closeGate(v) { $('gate').hidden = true; var s = gateState; gateState = null; if (s) s.resolve(v); }
+  $('gate-no').onclick = function () { closeGate(false); };
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && gateState) closeGate(false); });
+  $('gate-yes').onclick = async function () {
+    var s = gateState; if (!s) return;
+    if (s.mode !== 'copy' || s.phase === 'manual') { closeGate(true); return; }
+    var ok = false;
+    try { await navigator.clipboard.writeText(s.body); ok = true; } catch (e) {}
+    if (ok) { closeGate(true); return; }
+    s.phase = 'manual';
+    $('gate-why').textContent = 'Your browser blocked automatic copying. The text is selected below. Copy it yourself, then press Done.';
+    $('gate-yes').textContent = 'Done';
+    var r = document.createRange(); r.selectNodeContents($('gate-body'));
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  };
+
+  A.onOpen(function () { if (!$('results').childElementCount) renderResult(EXAMPLE, true); });
+  A.onReset(function () { $('results').textContent = ''; });
+})();
+</script>

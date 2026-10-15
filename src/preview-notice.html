@@ -1,0 +1,11 @@
+<script>
+(function () {
+  if (window.claude) return;
+  var h = document.querySelector('.top');
+  if (!h) return;
+  var n = document.createElement('p');
+  n.className = 'banner warn';
+  n.textContent = 'Preview mode. Reading photos, explaining steps and the teacher queue run inside the Claude app. The examples, consent screen, safety tab and audit log all work here.';
+  h.parentNode.insertBefore(n, h.nextSibling);
+})();
+</script>

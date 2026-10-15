@@ -1,0 +1,220 @@
+<script>
+(function () {
+  'use strict';
+  var A = window.__A, $ = A.$, el = A.el, audit = A.audit;
+  var db = null, user = null, uid = null, isTeacher = false, canWrite = null;
+  var unsubMine = null, unsubAll = null, mine = {}, all = [], qTok = 0;
+  var MAX_ITEMS = 40;
+
+  var STATUS = { pending: 'Waiting for your teacher', approved: 'Approved by your teacher', corrected: 'Corrected by your teacher', rejected: 'Sent back by your teacher' };
+  var STATUS_T = { pending: 'Waiting', approved: 'Approved', corrected: 'Corrected', rejected: 'Sent back' };
+  function nowIso() { return new Date().toISOString(); }
+  function fmt(t) { return String(t || '').replace('T', ' ').slice(0, 16) + ' UTC'; }
+  function kv(pairs) {
+    var dl = el('dl', 'kv');
+    pairs.forEach(function (p) {
+      if (p[1] == null || p[1] === '') return;
+      dl.appendChild(el('dt', null, p[0]));
+      var dd = el('dd'); dd.appendChild(el('span', p[2] || null, String(p[1]))); dl.appendChild(dd);
+    });
+    return dl;
+  }
+  function checkText(c) {
+    if (!c) return '';
+    if (c.status === 'agreed') return 'Two independent solves agree';
+    if (c.status === 'disagreed') return 'Disagree. Second solve: ' + (c.other_final || '');
+    return 'No second solve';
+  }
+
+  /* ---------- What a review contains: text only, never the photo ---------- */
+  function buildItem(q, isExample) {
+    var ma = q.model_answer || {}, ck = q.check || {};
+    return {
+      id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      createdAt: nowIso(), status: 'pending', example: !!isExample,
+      number: String(q.number || ''), question: String(q.question || '').slice(0, 1500),
+      student_answer: String(q.student_answer || '').slice(0, 500),
+      steps: (ma.steps || []).slice(0, 12).map(function (s) {
+        return { working: String(s.working || '').slice(0, 300), mark: String(s.mark || ''), why: String(s.why || '').slice(0, 200) };
+      }),
+      final_answer: String(ma.final_answer || '').slice(0, 300),
+      check: { status: ck.status || 'unchecked', other_final: String(ck.other_final || '').slice(0, 300), other_steps: (ck.other_steps || []).slice(0, 6).map(function (x) { return String(x).slice(0, 200); }) },
+      confidence: String(q.confidence || 'medium'),
+      flags: A.flagsOf(q).map(function (x) { return String(x).slice(0, 300); }),
+      events: [{ t: nowIso(), actor: 'student', action: 'sent_for_review', consent: A.CONSENT_V }],
+      teacher: null
+    };
+  }
+  function itemText(it) {
+    var o = ['Question ' + it.number, it.question, ''];
+    if (it.student_answer) o.push('Student wrote: ' + it.student_answer);
+    o.push('Answerly final answer: ' + it.final_answer);
+    o.push('Independent second solve: ' + checkText(it.check));
+    o.push('Answerly confidence: ' + it.confidence);
+    if (it.flags.length) o.push('Why flagged: ' + it.flags.join('; '));
+    o.push('', 'Answerly working:');
+    it.steps.forEach(function (s, n) { o.push((n + 1) + '. ' + s.working + '  [' + s.mark + ']'); });
+    if (it.example) o.push('', '(This is a demo question, not a real paper.)');
+    return o.join('\n');
+  }
+
+  /* ---------- Student: send for review (needs approval) ---------- */
+  function say(msg) { $('reviews-note').textContent = msg; }
+  A.sendReview = async function (q, isExample, b) {
+    if (!db || !uid) { say('Sending to a teacher needs you to be signed in.'); A.showView('reviews'); return; }
+    if (canWrite === false) { say('Your access is view-only, so you cannot send reviews. Ask for Contributor access.'); A.showView('reviews'); return; }
+    if (Object.keys(mine).length >= MAX_ITEMS) { say('You have ' + MAX_ITEMS + ' reviews waiting. Ask your teacher to clear some first.'); A.showView('reviews'); return; }
+    var item = buildItem(q, isExample);
+    var ok = await A.openGate({
+      title: 'Send this to your teacher?',
+      why: 'Your teacher will see exactly this text and nothing else. Your photo is never sent. Only you and your teacher can read it.',
+      body: itemText(item), yes: 'Approve and send', mode: 'confirm'
+    });
+    if (!ok) { await audit('student', 'send_for_review', 'Question ' + item.number + '. Text only.', 'Teacher review', '-', 'declined'); return; }
+    try {
+      var ref = db.doc('reviews/' + uid), snap = await ref.get(), p = { items: {} };
+      p.items[item.id] = item;
+      if (snap.exists) await ref.update(p); else await ref.set(p);
+      await audit('student', 'send_for_review', 'Question ' + item.number + '. Text only, no photo. Stored for the teacher.', 'Teacher review', '-', 'approved');
+      if (b) { b.textContent = 'Sent to your teacher'; b.disabled = true; }
+      say('Sent. You will see your teacher\'s decision here.');
+    } catch (e) {
+      await audit('student', 'send_for_review', 'Question ' + item.number + '. Could not save (' + ((e && e.code) || 'error') + ').', 'Teacher review', '-', 'failed');
+      if (b) { b.textContent = 'Could not send. Try again'; }
+      say('That did not send (' + ((e && e.code) || 'error') + '). Try again in a minute.');
+    }
+  };
+
+  /* ---------- Student: my reviews ---------- */
+  function trail(it) {
+    var d = el('details'); d.appendChild(el('summary', 'muted', 'Activity on this review'));
+    var ul = el('ul', 'muted'); ul.style.margin = '6px 0 0'; ul.style.paddingLeft = '18px';
+    (it.events || []).forEach(function (e) { ul.appendChild(el('li', null, fmt(e.t) + '  ' + e.actor + ': ' + String(e.action).replace(/_/g, ' '))); });
+    d.appendChild(ul); return d;
+  }
+  function renderMine() {
+    var box = $('reviews-list'); box.textContent = '';
+    var items = Object.keys(mine).map(function (k) { return mine[k]; }).sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
+    if (!items.length) { box.appendChild(el('p', 'muted', 'No reviews yet. After you check a paper, press "Send to my teacher" on any question.')); return; }
+    items.forEach(function (it) {
+      var c = el('article', 'rv'), h = el('div', 'q-head'), l = el('div', 'row');
+      l.appendChild(el('span', 'q-num', 'Q ' + it.number));
+      if (it.example) l.appendChild(el('span', 'pill ex', 'Demo'));
+      h.appendChild(l);
+      var r = el('div', 'row'); r.appendChild(el('span', 'pill', fmt(it.createdAt))); r.appendChild(el('span', 'st ' + it.status, STATUS[it.status] || it.status)); h.appendChild(r);
+      c.appendChild(h);
+      c.appendChild(kv([['Question', it.question], ['You wrote', it.student_answer], ['Answerly said', it.final_answer, 'mono'], ['Second solve', checkText(it.check)], ['Why flagged', (it.flags || []).join('. ')]]));
+      if (it.teacher) {
+        var n = el('div', 'teacher-note');
+        n.appendChild(el('span', 'eyebrow', 'From your teacher'));
+        if (it.teacher.answer) { var a = el('p'); a.appendChild(el('strong', null, 'Teacher\'s answer: ')); a.appendChild(el('span', 'mono', String(it.teacher.answer))); n.appendChild(a); }
+        if (it.teacher.note) n.appendChild(el('p', null, String(it.teacher.note)));
+        n.appendChild(el('span', 'muted', fmt(it.teacher.decidedAt)));
+        c.appendChild(n);
+      }
+      c.appendChild(trail(it));
+      box.appendChild(c);
+    });
+  }
+
+  /* ---------- Teacher: queue, with a gate before every decision ---------- */
+  async function decide(studentId, it, status, ans, note) {
+    var preview = 'Decision: ' + STATUS_T[status] + '\n' + (ans ? 'Teacher\'s answer: ' + ans + '\n' : '') + (note ? 'Note to student: ' + note : 'No note.');
+    var ok = await A.openGate({ title: 'Send this decision to the student?', why: 'The student will see this decision and note on their review. It is recorded on the review with the time.', body: preview, yes: 'Approve and send', mode: 'confirm' });
+    if (!ok) { await audit('teacher', 'review_' + status, 'Question ' + it.number + '.', 'Teacher review', '-', 'declined'); return false; }
+    var ev = (it.events || []).slice(); ev.push({ t: nowIso(), actor: 'teacher', action: status, consent: '-' });
+    var p = { items: {} };
+    p.items[it.id] = { status: status, teacher: { answer: ans, note: note, decidedAt: nowIso() }, events: ev };
+    try {
+      await db.doc('reviews/' + studentId).update(p);
+      await audit('teacher', 'review_' + status, 'Question ' + it.number + '. Student shown the decision.', 'Teacher review', '-', 'approved');
+      return true;
+    } catch (e) {
+      await audit('teacher', 'review_' + status, 'Could not save (' + ((e && e.code) || 'error') + ').', 'Teacher review', '-', 'failed');
+      $('queue-note').textContent = 'That decision did not save (' + ((e && e.code) || 'error') + '). Try again.';
+      return false;
+    }
+  }
+
+  async function renderQueue() {
+    var tok = ++qTok, box = $('queue-list');
+    var rows = [];
+    all.forEach(function (d) { Object.keys(d.items).forEach(function (k) { rows.push({ uid: d.uid, it: d.items[k] }); }); });
+    var pend = rows.filter(function (r) { return r.it.status === 'pending'; }).sort(function (a, b) { return a.it.createdAt > b.it.createdAt ? 1 : -1; });
+    var done = rows.filter(function (r) { return r.it.status !== 'pending'; }).sort(function (a, b) { return a.it.createdAt < b.it.createdAt ? 1 : -1; }).slice(0, 10);
+    $('tab-queue').textContent = pend.length ? 'Teacher queue (' + pend.length + ')' : 'Teacher queue';
+    var ids = []; rows.forEach(function (r) { if (ids.indexOf(r.uid) < 0) ids.push(r.uid); });
+    var ps = {};
+    try { if (user && ids.length) ps = await user.profiles(ids); } catch (e) {}
+    if (tok !== qTok) return;
+    box.textContent = '';
+    $('queue-note').textContent = pend.length ? pend.length + ' waiting for a decision.' : 'No reviews waiting.';
+    pend.concat(done).forEach(function (r) {
+      var it = r.it, c = el('article', 'rv'), h = el('div', 'q-head'), l = el('div', 'row');
+      l.appendChild(el('span', 'q-num', 'Q ' + it.number));
+      l.appendChild(el('strong', null, (ps[r.uid] && ps[r.uid].name) || 'A student'));
+      if (it.example) l.appendChild(el('span', 'pill ex', 'Demo'));
+      h.appendChild(l);
+      var rr = el('div', 'row'); rr.appendChild(el('span', 'pill', fmt(it.createdAt))); rr.appendChild(el('span', 'st ' + it.status, STATUS_T[it.status] || it.status)); h.appendChild(rr);
+      c.appendChild(h);
+      c.appendChild(kv([['Question', it.question], ['Student wrote', it.student_answer], ['Answerly said', it.final_answer, 'mono'], ['Second solve', checkText(it.check)], ['Confidence', it.confidence], ['Why flagged', (it.flags || []).join('. ')]]));
+      var det = el('details'); det.appendChild(el('summary', 'muted', 'Answerly\'s working'));
+      var pre = el('div', 'mono'); pre.style.cssText = 'font-size:.82rem;white-space:pre-wrap;margin-top:6px';
+      pre.textContent = (it.steps || []).map(function (s, n) { return (n + 1) + '. ' + s.working + '  [' + s.mark + ']'; }).join('\n');
+      det.appendChild(pre); c.appendChild(det);
+      if (it.status === 'pending') {
+        var f = el('div', 'sec');
+        var la = el('label', 'f', 'Your answer (only if you are correcting it)'); la.setAttribute('for', 'ans-' + it.id);
+        var ia = el('input'); ia.type = 'text'; ia.id = 'ans-' + it.id; ia.maxLength = 300; la.appendChild(ia);
+        var ln = el('label', 'f', 'Note to the student'); ln.setAttribute('for', 'note-' + it.id);
+        var tn = el('textarea'); tn.id = 'note-' + it.id; tn.maxLength = 800; ln.appendChild(tn);
+        f.appendChild(la); f.appendChild(ln);
+        var act = el('div', 'actions');
+        var run = function (status) {
+          return async function () {
+            var ans = ia.value.trim(), note = tn.value.trim();
+            if (status === 'corrected' && !ans) { $('queue-note').textContent = 'Type your corrected answer first.'; ia.focus(); return; }
+            if (status === 'rejected' && !note) { $('queue-note').textContent = 'Add a note so the student knows why it was sent back.'; tn.focus(); return; }
+            await decide(r.uid, it, status, ans, note);
+          };
+        };
+        act.appendChild(A.btn('Approve Answerly\'s answer', run('approved'), true));
+        act.appendChild(A.btn('Correct it', run('corrected')));
+        act.appendChild(A.btn('Send back', run('rejected')));
+        f.appendChild(act); c.appendChild(f);
+      } else if (it.teacher) {
+        var n = el('div', 'teacher-note');
+        if (it.teacher.answer) n.appendChild(el('p', 'mono', String(it.teacher.answer)));
+        if (it.teacher.note) n.appendChild(el('p', null, String(it.teacher.note)));
+        n.appendChild(el('span', 'muted', fmt(it.teacher.decidedAt))); c.appendChild(n);
+      }
+      c.appendChild(trail(it));
+      box.appendChild(c);
+    });
+    if (!pend.length && !done.length) box.appendChild(el('p', 'muted', 'When a student sends a review, it appears here live.'));
+  }
+
+  /* ---------- Start: who is here, what they may do ---------- */
+  async function init() {
+    try { if (window.claude && window.claude.use) { user = await window.claude.use('user'); db = await window.claude.use('db'); } } catch (e) {}
+    if (user) { try { uid = await user.id(); isTeacher = await user.canEdit(); canWrite = await user.can('data.write'); } catch (e) {} }
+    $('tab-queue').hidden = !(isTeacher && db);
+    if (!db || !uid) { say('Sending to a teacher needs you to be signed in. Everything else still works.'); renderMine(); return; }
+    renderMine();
+    unsubMine = db.doc('reviews/' + uid).onSnapshot(function (snap) {
+      var d = snap.exists ? snap.data() : null; mine = (d && d.items) || {}; renderMine();
+    }, function (e) { say('Could not load your reviews (' + ((e && e.code) || 'error') + ').'); });
+    if (isTeacher) {
+      unsubAll = db.collection('reviews').onSnapshot(function (qs) {
+        all = qs.docs.map(function (d) { return { uid: d.id, items: (d.data() || {}).items || {} }; }); renderQueue();
+      }, function (e) { $('queue-note').textContent = 'Could not load the queue (' + ((e && e.code) || 'error') + ').'; });
+    }
+  }
+  A.onOpen(init);
+  A.onReset(function () {
+    if (unsubMine) unsubMine(); if (unsubAll) unsubAll();
+    unsubMine = unsubAll = null; mine = {}; all = []; $('reviews-list').textContent = ''; $('queue-list').textContent = '';
+    $('tab-queue').hidden = true; say('');
+  });
+})();
+</script>
